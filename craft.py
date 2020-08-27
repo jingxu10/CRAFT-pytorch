@@ -1,4 +1,4 @@
-"""  
+"""
 Copyright (c) 2019-present NAVER Corp.
 MIT License
 """
@@ -7,6 +7,7 @@ MIT License
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.quantization import QuantStub, DeQuantStub
 
 from basenet.vgg16_bn import vgg16_bn, init_weights
 
@@ -49,35 +50,62 @@ class CRAFT(nn.Module):
             nn.Conv2d(16, num_class, kernel_size=1),
         )
 
+        self.quant1 = QuantStub()
+        self.quant2 = QuantStub()
+        self.quant3 = QuantStub()
+        self.quant4 = QuantStub()
+        self.quant5 = QuantStub()
+        self.dequant = DeQuantStub()
+
         init_weights(self.upconv1.modules())
         init_weights(self.upconv2.modules())
         init_weights(self.upconv3.modules())
         init_weights(self.upconv4.modules())
         init_weights(self.conv_cls.modules())
-        
+
     def forward(self, x):
+        x = self.quant1(x)
+
         """ Base network """
         sources = self.basenet(x)
+        sources = self.dequant(sources)
 
         """ U network """
         y = torch.cat([sources[0], sources[1]], dim=1)
+        y = self.quant2(y)
         y = self.upconv1(y)
 
+        y = self.dequant(y)
         y = F.interpolate(y, size=sources[2].size()[2:], mode='bilinear', align_corners=False)
         y = torch.cat([y, sources[2]], dim=1)
+        y = self.quant3(y)
         y = self.upconv2(y)
 
+        y = self.dequant(y)
         y = F.interpolate(y, size=sources[3].size()[2:], mode='bilinear', align_corners=False)
         y = torch.cat([y, sources[3]], dim=1)
+        y = self.quant4(y)
         y = self.upconv3(y)
 
+        y = self.dequant(y)
         y = F.interpolate(y, size=sources[4].size()[2:], mode='bilinear', align_corners=False)
         y = torch.cat([y, sources[4]], dim=1)
+        y = self.quant5(y)
         feature = self.upconv4(y)
 
         y = self.conv_cls(feature)
 
+        feature = self.dequant(feature)
+        y = self.dequant(y)
+
         return y.permute(0,2,3,1), feature
+
+    def fuse(self):
+        for m in self.modules():
+            if type(m) == double_conv:
+                for idx in range(len(m.conv)):
+                    if type(m.conv[idx]) == nn.Conv2d:
+                        torch.quantization.fuse_modules(m.conv, [str(idx), str(idx+1)], inplace=True)
 
 if __name__ == '__main__':
     model = CRAFT(pretrained=True).cuda()
