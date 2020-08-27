@@ -28,6 +28,8 @@ PyTorch implementation for CRAFT text detector that effectively detect text area
 ```
 pip install -r requirements.txt
 ```
+### Dataset
+[Total-Text-Dataset](https://github.com/cs-chan/Total-Text-Dataset/tree/master/Dataset)
 
 ### Training
 The code for training is not included in this repository, and we cannot release the full training code for IP reason.
