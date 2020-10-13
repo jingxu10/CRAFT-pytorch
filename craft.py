@@ -67,8 +67,10 @@ class CRAFT(nn.Module):
         x = self.quant1(x)
 
         """ Base network """
-        sources = self.basenet(x)
-        sources = self.dequant(sources)
+        # sources = self.basenet(x)
+        # sources = self.dequant(sources)
+        sources_ = self.basenet(x)
+        sources = [self.dequant(source) for source in sources_]
 
         """ U network """
         y = torch.cat([sources[0], sources[1]], dim=1)

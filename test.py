@@ -27,6 +27,7 @@ import json
 import zipfile
 
 from craft import CRAFT
+from CLEval.script import validate
 
 from collections import OrderedDict
 def copyStateDict(state_dict):
@@ -61,7 +62,8 @@ class CRAFT_Dataset(Dataset):
         return x,1
 
 parser = argparse.ArgumentParser(description='CRAFT Text Detection')
-parser.add_argument('--trained_model', default='weights/craft_mlt_25k.pth', type=str, help='pretrained model')
+parser.add_argument('--trained_model', default='models/craft_ic15_20k.pth', type=str, help='pretrained model')
+parser.add_argument('--gt_file', default='CLEval/gt/gt_IC15.zip', type=str, help='ground truth files')
 parser.add_argument('--text_threshold', default=0.7, type=float, help='text confidence threshold')
 parser.add_argument('--low_text', default=0.4, type=float, help='text low-bound score')
 parser.add_argument('--link_threshold', default=0.4, type=float, help='link confidence threshold')
@@ -76,7 +78,7 @@ parser.add_argument('--refiner_model', default='weights/craft_refiner_CTW1500.pt
 parser.add_argument('--int8', default=False, action='store_true', help='quantize with INT8')
 
 args = parser.parse_args()
-
+refine_net = None
 
 """ For test images in a folder """
 image_list, _, _ = file_utils.get_files(args.test_folder)
@@ -136,21 +138,33 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, r
 
     return boxes, polys, ret_score_text
 
-def ilit_test(net):
+def inference(net):
     for k, image_path in enumerate(image_list):
+        print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\r')
         image = imgproc.loadImage(image_path)
-        # resize
-        img_resized, target_ratio, size_heatmap = imgproc.resize_aspect_ratio(image, args.canvas_size, interpolation=cv2.INTER_LINEAR, mag_ratio=args.mag_ratio)
-        # preprocessing
-        x = imgproc.normalizeMeanVariance(img_resized)
-        x = torch.from_numpy(x).permute(2, 0, 1)    # [h, w, c] to [c, h, w]
-        x = Variable(x.unsqueeze(0))                # [c, h, w] to [b, c, h, w]
-        # forward pass
-        with torch.no_grad():
-            y, feature = net(x)
 
-    return 1
+        bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
 
+        # save score text
+        filename, file_ext = os.path.splitext(os.path.basename(image_path))
+        mask_file = result_folder + "/res_" + filename + '_mask.jpg'
+        cv2.imwrite(mask_file, score_text)
+
+        file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
+
+def ilit_test(net):
+    inference(net)
+    outZip = zipfile.ZipFile('result.zip', mode='w', allowZip64=True)
+    for file in os.listdir('result'):
+        if file.endswith('.txt'):
+            outZip.write(os.path.join('result/', file), file, zipfile.ZIP_DEFLATED)
+    outZip.close()
+    resDict = validate(args.gt_file)
+    os.remove('result.zip')
+    precision = resDict['method']['Detection']['precision']
+    recall = resDict['method']['Detection']['recall']
+    f1 = 2 * (precision*recall) / (precision+recall)
+    return f1
 
 if __name__ == '__main__':
     # load net
@@ -178,7 +192,6 @@ if __name__ == '__main__':
         net = tuner.tune(net, dataloader, eval_func=ilit_test)
 
     # LinkRefiner
-    refine_net = None
     if args.refine:
         from refinenet import RefineNet
         refine_net = RefineNet()
@@ -194,19 +207,5 @@ if __name__ == '__main__':
         args.poly = True
 
     t = time.time()
-
-    # load data
-    for k, image_path in enumerate(image_list):
-        print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\r')
-        image = imgproc.loadImage(image_path)
-
-        bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
-
-        # save score text
-        filename, file_ext = os.path.splitext(os.path.basename(image_path))
-        mask_file = result_folder + "/res_" + filename + '_mask.jpg'
-        cv2.imwrite(mask_file, score_text)
-
-        file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
-
+    inference(net)
     print("elapsed time : {}s".format(time.time() - t))
