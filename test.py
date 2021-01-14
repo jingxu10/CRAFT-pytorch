@@ -184,12 +184,12 @@ if __name__ == '__main__':
     net.eval()
 
     if args.int8:
-        import ilit
+        from lpot import Quantization
         dataset = CRAFT_Dataset(args.test_folder, args.canvas_size, args.mag_ratio)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=1)
         net.fuse()
-        tuner = ilit.Tuner('./config.yaml')
-        net = tuner.tune(net, dataloader, eval_func=ilit_test)
+        quantizer = Quantization("./config.yaml")
+        net = quantizer(net, dataloader, eval_func=ilit_test)
 
     # LinkRefiner
     if args.refine:

@@ -1,12 +1,19 @@
-framework:
-  - name: pytorch                                # possible values are tensorflow, mxnet and pytorch
+model:
+  name: craft_ocr
+  framework: pytorch
 
-calibration:
-  - iterations: 10, 50
+quantization:
+  calibration:
+    sampling_size: 10, 50
+
+evaluation:
+  accuracy:
+    metric:
+      topk: 1
 
 tuning:
-  - metric:
-      - topk: 1                                  # tuning metrics: accuracy 
-    accuracy_criterion:
-      - relative: 0.01                           # the tuning target of accuracy loss percentage: 1%
-    random_seed: 9527                            # random seed
+  accuracy_criterion:
+    relative: 0.01                           # the tuning target of accuracy loss percentage: 1%
+  exit_policy:
+    timeout: 60
+  random_seed: 9527                            # random seed
