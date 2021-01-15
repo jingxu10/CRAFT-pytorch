@@ -76,6 +76,8 @@ parser.add_argument('--test_folder', default='/data/', type=str, help='folder pa
 parser.add_argument('--refine', default=False, action='store_true', help='enable link refiner')
 parser.add_argument('--refiner_model', default='weights/craft_refiner_CTW1500.pth', type=str, help='pretrained refiner model')
 parser.add_argument('--int8', default=False, action='store_true', help='quantize with INT8')
+parser.add_argument('--jit', default=False, action='store_true', help='run with jit')
+parser.add_argument('--ipex', default=False, action='store_true', help='run with ipex')
 
 args = parser.parse_args()
 refine_net = None
@@ -100,6 +102,8 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, r
     x = Variable(x.unsqueeze(0))                # [c, h, w] to [b, c, h, w]
     if cuda:
         x = x.cuda()
+    if args.ipex:
+        x = x.to('dpcpp')
 
     # forward pass
     with torch.no_grad():
@@ -167,6 +171,13 @@ def ilit_test(net):
     return f1
 
 if __name__ == '__main__':
+    if args.ipex:
+        try:
+            import intel_pytorch_extension as ipex
+            print("ipex imported")
+        except:
+            print("importing ipex failed. Quit.")
+            exit(1)
     # load net
     net = CRAFT()     # initialize
 
@@ -181,15 +192,29 @@ if __name__ == '__main__':
         net = torch.nn.DataParallel(net)
         cudnn.benchmark = False
 
-    net.eval()
-
     if args.int8:
         from lpot import Quantization
         dataset = CRAFT_Dataset(args.test_folder, args.canvas_size, args.mag_ratio)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=1)
-        net.fuse()
-        quantizer = Quantization("./config.yaml")
+        if args.ipex:
+            quantizer = Quantization("./config_ipex.yaml")
+        else:
+            net.eval()
+            net.fuse()
+            quantizer = Quantization("./config.yaml")
         net = quantizer(net, dataloader, eval_func=ilit_test)
+
+    exit(1)
+    if args.ipex:
+        net = net.to('dpcpp')
+    if args.jit:
+        try:
+            net = torch.jit.script(net)
+        except:
+            d = torch.randn(1, 3, 720, 1280)
+            if args.ipex:
+                d = d.to('dpcpp')
+            net = torch.jit.trace(net, d)
 
     # LinkRefiner
     if args.refine:
