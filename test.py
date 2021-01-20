@@ -75,6 +75,7 @@ parser.add_argument('--show_time', default=False, action='store_true', help='sho
 parser.add_argument('--test_folder', default='/data/', type=str, help='folder path to input images')
 parser.add_argument('--refine', default=False, action='store_true', help='enable link refiner')
 parser.add_argument('--refiner_model', default='weights/craft_refiner_CTW1500.pth', type=str, help='pretrained refiner model')
+parser.add_argument('--quant', default=False, action='store_true', help='tune with int8')
 parser.add_argument('--int8', default=False, action='store_true', help='quantize with INT8')
 parser.add_argument('--jit', default=False, action='store_true', help='run with jit')
 parser.add_argument('--ipex', default=False, action='store_true', help='run with ipex')
@@ -89,7 +90,7 @@ result_folder = './result/'
 if not os.path.isdir(result_folder):
     os.mkdir(result_folder)
 
-def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, refine_net=None):
+def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, refine_net=None, conf=None):
     t0 = time.time()
 
     # resize
@@ -102,12 +103,20 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, r
     x = Variable(x.unsqueeze(0))                # [c, h, w] to [b, c, h, w]
     if cuda:
         x = x.cuda()
-    if args.ipex:
-        x = x.to('dpcpp')
 
+    t00 = time.time()
     # forward pass
     with torch.no_grad():
-        y, feature = net(x)
+        if args.ipex:
+            x = x.to('dpcpp')
+            if conf:
+                with ipex.AutoMixPrecision(conf, running_mode='inference'):
+                    y, feature = net(x)
+            else:
+                y, feature = net(x)
+        else:
+            y, feature = net(x)
+    t_delta = time.time() - t00
 
     # make score and link map
     score_text = y[0,:,:,0].cpu().data.numpy()
@@ -140,14 +149,17 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, r
 
     if args.show_time : print("\ninfer/postproc time : {:.3f}/{:.3f}".format(t0, t1))
 
-    return boxes, polys, ret_score_text
+    return boxes, polys, ret_score_text, t_delta
 
-def inference(net):
+def inference(net, conf=None):
+    t_sum = 0
+    count = 0
     for k, image_path in enumerate(image_list):
         print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\r')
         image = imgproc.loadImage(image_path)
 
-        bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
+        bboxes, polys, score_text, t_delta = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net, conf)
+        t_sum = t_sum + t_delta
 
         # save score text
         filename, file_ext = os.path.splitext(os.path.basename(image_path))
@@ -155,6 +167,8 @@ def inference(net):
         cv2.imwrite(mask_file, score_text)
 
         file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
+        count = count + 1
+    print("ave inf time/f: {}s/f | {}".format(t_sum/count, count))
 
 def ilit_test(net):
     inference(net)
@@ -192,7 +206,7 @@ if __name__ == '__main__':
         net = torch.nn.DataParallel(net)
         cudnn.benchmark = False
 
-    if args.int8:
+    if args.quant:
         from lpot import Quantization
         dataset = CRAFT_Dataset(args.test_folder, args.canvas_size, args.mag_ratio)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=1)
@@ -203,10 +217,15 @@ if __name__ == '__main__':
             net.fuse()
             quantizer = Quantization("./config.yaml")
         net = quantizer(net, dataloader, eval_func=ilit_test)
+        exit(1)
 
-    exit(1)
     if args.ipex:
         net = net.to('dpcpp')
+        if args.int8:
+            ipex_config_path = os.path.join(os.path.expanduser('./lpot_workspace/pytorch_ipex/craft_ocr/checkpoint/'), "best_configure.json")
+            conf = ipex.AmpConf(torch.int8, configure_file=ipex_config_path)
+        else:
+            conf = ipex.AmpConf(None)
     if args.jit:
         try:
             net = torch.jit.script(net)
@@ -232,5 +251,5 @@ if __name__ == '__main__':
         args.poly = True
 
     t = time.time()
-    inference(net)
+    inference(net, conf)
     print("elapsed time : {}s".format(time.time() - t))
