@@ -108,7 +108,7 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, r
     # forward pass
     with torch.no_grad():
         if args.ipex:
-            x = x.to('dpcpp')
+            x = x.to('xpu')
             if conf:
                 with ipex.AutoMixPrecision(conf, running_mode='inference'):
                     y, feature = net(x)
@@ -220,7 +220,7 @@ if __name__ == '__main__':
         exit(1)
 
     if args.ipex:
-        net = net.to('dpcpp')
+        net = net.to('xpu')
         if args.int8:
             ipex_config_path = os.path.join(os.path.expanduser('./lpot_workspace/pytorch_ipex/craft_ocr/checkpoint/'), "best_configure.json")
             conf = ipex.AmpConf(torch.int8, configure_file=ipex_config_path)
@@ -232,7 +232,7 @@ if __name__ == '__main__':
         except:
             d = torch.randn(1, 3, 720, 1280)
             if args.ipex:
-                d = d.to('dpcpp')
+                d = d.to('xpu')
             net = torch.jit.trace(net, d)
 
     # LinkRefiner
